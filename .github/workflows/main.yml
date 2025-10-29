@@ -25,14 +25,17 @@ jobs:
         creds: ${{ secrets.AZURE_CREDENTIALS }}
 
     - name: Build and Push Docker Image
-      uses: azure/docker-login@v2
-      with:
-        login-server: ${{ env.ACR_LOGIN_SERVER }}
-        username: ${{ secrets.ACR_USERNAME }}
-        password: ${{ secrets.ACR_PASSWORD }}
-    - run: |
+      run: |
+        # Login to ACR
+        echo ${{ secrets.ACR_PASSWORD }} | docker login ${{ env.ACR_LOGIN_SERVER }} -u ${{ secrets.ACR_USERNAME }} --password-stdin
+        
+        # Build and tag image
         docker build -t ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }} .
+        docker tag ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }} ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:latest
+        
+        # Push images
         docker push ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+        docker push ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:latest
 
     - name: Install kubectl
       uses: azure/setup-kubectl@v4
@@ -48,7 +51,12 @@ jobs:
         # Update deployment with new image
         sed -i 's|<ACR_LOGIN_SERVER>|${{ env.ACR_LOGIN_SERVER }}|g' kubernetes/deployment.yaml
         sed -i 's|<BUILD_ID>|${{ github.sha }}|g' kubernetes/deployment.yaml
-
+        
+        # Apply Kubernetes manifests
         kubectl apply -f kubernetes/
+        
+        # Update deployment image
         kubectl set image deployment/todo-app-deployment todo-app-container=${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-        kubectl rollout status deployment/todo-app-deployment
+        
+        # Wait for rollout to complete
+        kubectl rollout status deployment/todo-app-deployment --timeout=300s
