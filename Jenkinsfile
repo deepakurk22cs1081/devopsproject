@@ -3,8 +3,6 @@ pipeline {
 
     environment {
         ACR_LOGIN_SERVER = 'tododevopsacr.azurecr.io'
-        ACR_USERNAME = credentials('acr-username')
-        ACR_PASSWORD = credentials('acr-password')
         RESOURCE_GROUP = 'todo-devops-rg'
         AKS_CLUSTER_NAME = 'tododevopsaks'
         IMAGE_NAME = 'todo-app'
@@ -13,24 +11,28 @@ pipeline {
     stages {
         stage('Checkout') {
             steps {
-                git branch: 'main', url: 'https://github.com/deepakurk22cs1081/Automated-ToDo-DevOps.git'
+                git branch: 'main', url: 'https://github.com/your-repo/Automated-ToDo-DevOps.git'
             }
         }
 
-        stage('Build Docker Image') {
+        stage('Azure Login') {
             steps {
-                script {
-                    docker.build("${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${env.BUILD_NUMBER}")
+                withCredentials([azureServicePrincipal(credentialsId: 'azure-credentials')]) {
+                    sh 'az login --service-principal -u $AZURE_CLIENT_ID -p $AZURE_CLIENT_SECRET -t $AZURE_TENANT_ID'
                 }
             }
         }
 
-        stage('Push to ACR') {
+        stage('Build and Push Docker Image') {
             steps {
                 script {
-                    docker.withRegistry("https://${ACR_LOGIN_SERVER}", 'acr-credentials') {
-                        docker.image("${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${env.BUILD_NUMBER}").push()
-                        docker.image("${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${env.BUILD_NUMBER}").push('latest')
+                    def imageTag = "${env.BUILD_NUMBER}"
+                    sh "docker build -t ${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${imageTag} ."
+                    sh "docker tag ${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${imageTag} ${ACR_LOGIN_SERVER}/${IMAGE_NAME}:latest"
+                    withCredentials([usernamePassword(credentialsId: 'acr-credentials', usernameVariable: 'ACR_USER', passwordVariable: 'ACR_PASS')]) {
+                        sh "docker login ${ACR_LOGIN_SERVER} -u $ACR_USER -p $ACR_PASS"
+                        sh "docker push ${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${imageTag}"
+                        sh "docker push ${ACR_LOGIN_SERVER}/${IMAGE_NAME}:latest"
                     }
                 }
             }
@@ -39,25 +41,13 @@ pipeline {
         stage('Deploy to AKS') {
             steps {
                 script {
-                    sh """
-                        az aks get-credentials --resource-group ${RESOURCE_GROUP} --name ${AKS_CLUSTER_NAME} --overwrite-existing
-                        kubectl apply -f kubernetes/
-                        kubectl set image deployment/todo-app-deployment todo-app-container=${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${env.BUILD_NUMBER}
-                    """
+                    def imageTag = "${env.BUILD_NUMBER}"
+                    sh "az aks get-credentials --resource-group ${RESOURCE_GROUP} --name ${AKS_CLUSTER_NAME} --overwrite-existing"
+                    sh "kubectl apply -f kubernetes/"
+                    sh "kubectl set image deployment/todo-app-deployment todo-app-container=${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${imageTag}"
+                    sh "kubectl rollout status deployment/todo-app-deployment --timeout=300s"
                 }
             }
-        }
-    }
-
-    post {
-        always {
-            sh 'docker system prune -f'
-        }
-        success {
-            echo 'Pipeline succeeded!'
-        }
-        failure {
-            echo 'Pipeline failed!'
         }
     }
 }
