@@ -1,0 +1,15 @@
+---
+- name: Deploy Kubernetes Manifests
+  hosts: localhost
+  connection: local
+  tasks:
+    - name: Configure AKS credentials
+      command: az aks get-credentials --resource-group {{ resource_group }} --name {{ aks_cluster_name }} --overwrite-existing
+
+    - name: Apply Kubernetes manifests
+      kubernetes.core.k8s:
+        state: present
+        src: "../kubernetes/{{ item }}"
+      loop:
+        - deployment.yaml
+        - service.yaml
